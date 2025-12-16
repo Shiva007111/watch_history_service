@@ -1,0 +1,21 @@
+{
+  "name": "watch-history-service",
+  "version": "1.0.0",
+  "description": "High-performance watch history microservice",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test:load": "k6 run load-test.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "fastify": "^4.26.1",
+    "ioredis": "^5.3.2",
+    "pg": "^8.11.3",
+    "pm2": "^6.0.14"
+  },
+  "devDependencies": {
+    "k6": "^0.0.0"
+  }
+}
