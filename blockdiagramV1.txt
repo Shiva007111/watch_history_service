@@ -1,0 +1,121 @@
+==================== WRITE FLOW (HOT PATH) ====================
+
+Client (Mobile / Web)
+        |
+        | POST /users/:session_id/playlists/watchhistory
+        | (content_id, catalog_id, playback_time)
+        v
+Watch History API (Fastify / Node.js)
+        |
+        | 1. UPDATE Redis Cache (fast, in-memory)
+        |    - ZADD wh:order:{user_id}
+        |      score = last_watched_timestamp
+        |      value = content_id
+        |
+        |    - HSET wh:progress:{user_id}
+        |      field = content_id
+        |      value = playback_time
+        |
+        | 2. XADD event to Redis Stream (durable log)
+        v
+Redis Stream
+stream:watch-history
+        |
+        | 3. API responds immediately (non-blocking)
+        v
+Client receives response
+{ status: "ok", message: "Watch history updated" }
+
+
+==================== ASYNC PROCESSING (WRITE-BEHIND) ====================
+
+Redis Stream (stream:watch-history)
+        |
+        | XREADGROUP (Consumer Group, Batch)
+        v
+Worker (Node.js)
+        |
+        | Collect batch of events
+        |
+        | Collapse duplicate updates
+        | (keep latest playback_time per user_id + content_id)
+        |
+        | BEGIN DB TRANSACTION
+        |
+        | For each unique (user_id, content_id):
+        |   - get or create playlist
+        |   - upsert listitem (latest state only)
+        |
+        v
+PostgreSQL (Source of Truth)
+playlists
+listitems
+        |
+        | COMMIT TRANSACTION
+        |
+        | (Optional) Cache reconciliation
+        v
+
+
+==================== REDIS CACHE LAYER ====================
+
+Redis Cache
+        |
+        | ZSET  : wh:order:{user_id}
+        | score : last_watched_timestamp
+        | value : content_id
+        |
+        | (Maintains order of watched content)
+        |
+        | HASH  : wh:progress:{user_id}
+        | field : content_id
+        | value : playback_time
+        |
+        v
+Cached Watch History State
+
+NOTE:
+ZSET  -> WHAT content was watched & in WHAT order
+HASH  -> Current playback state of each content
+ZSET + HASH = Complete watch history
+
+
+==================== READ FLOW (GET API) ====================
+
+Client
+        |
+        | GET /users/:user_id/watchhistory
+        v
+Watch History API
+        |
+        | ZREVRANGE wh:order:{user_id}
+        | (get content_ids in recent order)
+        v
+Redis ZSET
+        |
+        | HMGET wh:progress:{user_id} content_ids
+        v
+Redis HASH
+        |
+        v
+Watch History API
+        |
+        | Merge content_id + playback_time
+        v
+Client receives response
+[
+  { content_id, playback_time },
+  ...
+]
+
+
+==================== FINAL VERDICT (PRODUCTION GRADE) ====================
+
+✔ Redis Cache absorbs high-frequency write traffic
+✔ API never blocks on database writes
+✔ Redis Stream guarantees durability of events
+✔ Worker smooths DB pressure using batching + coalescing
+✔ PostgreSQL remains the single source of truth
+✔ System scales horizontally as POST traffic increases
+✔ GET APIs are always fast due to Redis-first reads
+

@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'watch-history-api',
-      script: 'server.js',
+      script: 'src/api/server.js',
       instances: 1, // Or 'max' to use all CPU cores
       autorestart: true,
       watch: false,
@@ -18,7 +18,7 @@ module.exports = {
     },
     {
       name: 'watch-history-worker',
-      script: 'worker.js',
+      script: 'src/worker/index.js',
       instances: 1, // Workers usually don't need clustering unless processing is CPU heavy
       autorestart: true,
       watch: false,

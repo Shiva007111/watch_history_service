@@ -1,0 +1,108 @@
+==================== WRITE FLOW ====================
+
+Client (Mobile / Web)
+        |
+        | POST /users/:session_id/playlists/watchhistory
+        | (content_id, catalog_id, playback_time)
+        v
+Watch History API (Fastify / Node.js)
+        |
+        | 1. XADD event to Redis Stream (non-blocking)
+        v
+Redis Stream
+stream:watch-history
+        |
+        | 2. API responds immediately
+        v
+Client receives response
+{ status: "ok", message: "Watch history updated" }
+
+
+==================== ASYNC PROCESSING ====================
+
+Redis Stream (stream:watch-history)
+        |
+        | XREADGROUP (Consumer Group, Batch)
+        v
+Worker (Node.js)
+        |
+        | BEGIN DB TRANSACTION
+        |
+        | For each message in batch:
+        |   - get or create playlist
+        |   - upsert listitem
+        |
+        v
+PostgreSQL (Source of Truth)
+playlists
+listitems
+        |
+        | COMMIT TRANSACTION
+        |
+        | Update Cache
+        v
+
+
+==================== REDIS CACHE LAYER ====================
+
+Redis Cache
+        |
+        | ZADD
+        | key   : wh:order:{user_id}
+        | score : last_watched_timestamp
+        | value : content_id
+        |
+        | (Maintains order of watched content)
+        |
+        | HSET
+        | key   : wh:progress:{user_id}
+        | field : content_id
+        | value : playback_time
+        |
+        v
+Cached Watch History State
+
+NOTE:
+ZSET  -> WHAT content was watched & in WHAT order
+HASH  -> Current playback state of each content
+ZSET + HASH = Complete watch history
+
+
+==================== READ FLOW (GET API) ====================
+
+Client
+        |
+        | GET /users/:user_id/watchhistory
+        v
+Watch History API
+        |
+        | ZREVRANGE wh:order:{user_id}
+        | (get content_ids in recent order)
+        v
+Redis ZSET
+        |
+        | HMGET wh:progress:{user_id} content_ids
+        v
+Redis HASH
+        |
+        v
+Watch History API
+        |
+        | Merge content_id + playback_time
+        v
+Client receives response
+[
+  { content_id, playback_time },
+  ...
+]
+
+
+==================== KEY DESIGN POINTS ====================
+
+- API response is sent immediately after enqueueing event
+- Redis Stream handles durability and async processing
+- Worker processes messages in batches
+- PostgreSQL remains the source of truth
+- Redis Cache is optimized for fast GET APIs
+- System scales easily as more APIs are added
+

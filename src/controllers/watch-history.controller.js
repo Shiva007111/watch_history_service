@@ -1,13 +1,6 @@
-require('dotenv').config();
-const fastify = require('fastify')({ logger: true });
-const redis = require('./redis-client');
-const { Pool } = require('pg');
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://localhost:5432/saranyu_ott_development',
-  max: 10, 
-  idleTimeoutMillis: 30000,
-});
+const { masterPool } = require('../config/db');
+const redis = require('../config/redis');
+const { SCHEMA } = require('../lib/db-ops');
 
 const watchHistorySchema = {
   body: {
@@ -29,14 +22,14 @@ const watchHistorySchema = {
   }
 };
 
-fastify.post('/users/:session_id/playlists/watchhistory', { schema: watchHistorySchema }, async (request, reply) => {
+async function updateWatchHistory(request, reply) {
   const { session_id } = request.params;
   const { listitem } = request.body;
   const { content_id, catalog_id, play_back_time } = listitem;
 
   try {
-    const sessionRes = await pool.query(
-      `SELECT user_id FROM dangal_dangal_schema.sessions WHERE session_id = $1 LIMIT 1`,
+    const sessionRes = await masterPool.query(
+      `SELECT user_id FROM ${SCHEMA}.sessions WHERE session_id = $1 LIMIT 1`,
       [session_id]
     );
 
@@ -46,9 +39,25 @@ fastify.post('/users/:session_id/playlists/watchhistory', { schema: watchHistory
     }
 
     const user_id = sessionRes.rows[0].user_id;
+    const cacheKeyOrder = `wh:order:${user_id}`;
+    const cacheKeyProgress = `wh:progress:${user_id}`;
+    const timestamp = Math.floor(Date.now() / 1000);
 
     const pipeline = redis.pipeline();
-    // add to redis stream like event
+
+    //  Update Redis cache (HOT PATH)
+    pipeline.zadd(
+      cacheKeyOrder,
+      timestamp,
+      content_id
+    );
+
+    pipeline.hset(
+      cacheKeyProgress,
+      content_id,
+      play_back_time
+    );
+    
     pipeline.xadd('stream:watch-history', '*', 
       'user_id', user_id, 
       'content_id', content_id, 
@@ -64,20 +73,9 @@ fastify.post('/users/:session_id/playlists/watchhistory', { schema: watchHistory
     request.log.error(err);
     reply.code(500).send({ error: 'Internal Server Error' });
   }
-});
+}
 
-// Health check
-fastify.get('/health', async () => {
-  return { status: 'ok', uptime: process.uptime() };
-});
-
-const start = async () => {
-  try {
-    await fastify.listen({ port: 3000, host: '0.0.0.0' });
-  } catch (err) {
-    fastify.log.error(err);
-    process.exit(1);
-  }
+module.exports = {
+  updateWatchHistory,
+  watchHistorySchema,
 };
-
-start();

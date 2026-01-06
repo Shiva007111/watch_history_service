@@ -14,5 +14,3 @@ logs/
 # Local / experimental files
 implementation.txt
 load-test.js
-simple-load-test.js
-
